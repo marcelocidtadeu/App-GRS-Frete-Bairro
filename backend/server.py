@@ -42,13 +42,20 @@ class ApiConfigCreate(BaseModel):
     api_key_intelipost: str
     sobrepreco_padrao: float = 135.0
 
+class DeparaMapping(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    mappings: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 class ProcessingHistory(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    tipo: str  # "cotacao" ou "cep"
+    tipo: str
     arquivo_entrada: str
     arquivo_saida: Optional[str] = None
-    status: str  # "processando", "concluido", "erro"
+    status: str
     total_linhas: int = 0
     linhas_processadas: int = 0
     linhas_com_erro: int = 0
@@ -60,7 +67,6 @@ class ProcessingHistory(BaseModel):
 # ============ HELPER FUNCTIONS ============
 
 def to_float(x):
-    """Converte um valor para float, lidando com vírgulas"""
     if pd.isna(x):
         return None
     if isinstance(x, (int, float)):
@@ -74,14 +80,12 @@ def to_float(x):
         return None
 
 def normalize_cep(val):
-    """Normaliza um CEP para conter apenas dígitos, completando com zero à esquerda"""
     s = re.sub(r"\D", "", str(val) if val is not None else "")
     if len(s) < 8:
         s = s.zfill(8)
     return s if len(s) == 8 else None
 
 def extract_messages(data_or_text):
-    """Extrai mensagens de erro de uma resposta de API"""
     try:
         if isinstance(data_or_text, str):
             return data_or_text[:500]
@@ -107,7 +111,6 @@ def extract_messages(data_or_text):
             return str(data_or_text)[:500]
 
 def pick_column(cols, *candidates):
-    """Procura em uma lista de colunas pelo primeiro match (case-insensitive)"""
     low_map = {c.strip().lower(): c for c in cols}
     for cand in candidates:
         key = cand.strip().lower()
@@ -126,52 +129,22 @@ async def process_cotacao_intelipost(
     df: pd.DataFrame,
     api_key: str,
     sobrepreco: float,
-    depara_df: Optional[pd.DataFrame] = None
+    depara_map: Dict[str, Dict[str, str]]
 ) -> Tuple[pd.DataFrame, List[str]]:
-    """
-    Processa cotações de frete usando a API Intelipost
-    Retorna (DataFrame de resultados, logs)
-    """
     logs = []
     logs.append(f"[INFO] Iniciando processamento de {len(df)} linhas")
     
-    # Processar DE-PARA se fornecido
-    depara_map = {}
-    depara_available = False
-    if depara_df is not None:
-        try:
-            depara_df.columns = [c.strip() for c in depara_df.columns]
-            col_intelipost = pick_column(
-                depara_df.columns,
-                "intelipost", "nome_intelipost", "delivery_method_name", "transportadora", "carrier"
-            )
-            col_erp = pick_column(depara_df.columns, "erp", "transportadora_erp", "nome_erp", "erp_nome")
-            col_cod_erp = pick_column(depara_df.columns, "codigo_erp", "cod_erp", "codigo", "código_erp")
-            
-            if col_intelipost:
-                depara_available = True
-                for _, r in depara_df.iterrows():
-                    key = str(r[col_intelipost]).strip().lower() if not pd.isna(r[col_intelipost]) else ""
-                    if not key:
-                        continue
-                    depara_map[key] = {
-                        "erp": (None if col_erp is None else (None if pd.isna(r.get(col_erp, None)) else str(r.get(col_erp)))),
-                        "codigo_erp": (None if col_cod_erp is None else (None if pd.isna(r.get(col_cod_erp, None)) else str(r.get(col_cod_erp))))
-                    }
-                logs.append(f"[INFO] DE-PARA carregado com {len(depara_map)} mapeamentos")
-        except Exception as e:
-            logs.append(f"[WARN] Erro ao processar DE-PARA: {str(e)}")
+    depara_available = len(depara_map) > 0
+    if depara_available:
+        logs.append(f"[INFO] DE-PARA carregado com {len(depara_map)} mapeamentos")
     
-    # Preparar DataFrame
     df.columns = [c.strip().lower() for c in df.columns]
     
-    # Remover coluna de estado se existir
     for nome in ["est", "estado", "uf"]:
         if nome in df.columns:
             df = df.drop(columns=[nome])
             break
     
-    # Converter colunas numéricas
     colunas_numericas = ["peso", "precoproduto", "comprimento", "altura", "largura"]
     obrigatorias = ["sku", "ceporigem", "cepdestino"] + colunas_numericas
     
@@ -182,15 +155,14 @@ async def process_cotacao_intelipost(
     for col in colunas_numericas:
         df[col] = df[col].apply(to_float)
     
-    # Normalizar CEPs
     df["cep_origem_payload"] = df["ceporigem"].apply(normalize_cep)
     df["cep_destino_payload"] = df["cepdestino"].apply(normalize_cep)
     
-    # Fazer requisições
     endpoint = "https://api.intelipost.com.br/api/v1/quote_by_product"
     headers = {
-        "api-key": api_key,
-        "Content-Type": "application/json"
+        "api_key": api_key,
+        "Content-Type": "application/json",
+        "platform": "api"
     }
     
     session = requests.Session()
@@ -276,17 +248,14 @@ async def process_cotacao_intelipost(
                 })
                 continue
             
-            # Selecionar menor opção
             menor_opcao = min(delivery_options, key=lambda x: x.get("final_shipping_cost", float("inf")))
             carrier_nome = menor_opcao.get("delivery_method_name") or menor_opcao.get("description") or "N/A"
             final_cost = menor_opcao.get("final_shipping_cost")
             
-            # Aplicar sobrepreço
             final_cost_com_sobrepreco = None
             if final_cost is not None:
                 final_cost_com_sobrepreco = final_cost * (1 + sobrepreco / 100)
             
-            # Aplicar DE-PARA
             carrier_erp = "NÃO ENCONTRADO"
             codigo_erp = "NÃO ENCONTRADO"
             if depara_available:
@@ -337,7 +306,6 @@ async def process_cotacao_intelipost(
 # ============ VIACEP LOGIC ============
 
 def limpar_cep(cep) -> Optional[str]:
-    """Mantém apenas dígitos e completa com zeros à esquerda"""
     if pd.isna(cep):
         return None
     cep = "".join(ch for ch in str(cep) if ch.isdigit())
@@ -348,7 +316,6 @@ def limpar_cep(cep) -> Optional[str]:
     return cep if len(cep) == 8 else None
 
 def via_cep_lookup(session: requests.Session, cep: str, timeout: int = 5) -> Optional[Dict]:
-    """Consulta ViaCEP e retorna o JSON"""
     url = f"https://viacep.com.br/ws/{cep}/json/"
     try:
         r = session.get(url, timeout=timeout)
@@ -366,7 +333,6 @@ def buscar_bairro_via_cep(
     tentativas: int = 4,
     atraso_base: float = 0.4
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Faz retries com backoff exponencial para ViaCEP"""
     for i in range(tentativas):
         data = via_cep_lookup(session, cep)
         if data:
@@ -378,15 +344,10 @@ def buscar_bairro_via_cep(
     return None, None, None
 
 async def process_busca_cep(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[str]]:
-    """
-    Processa busca de CEPs usando ViaCEP
-    Retorna (DataFrame enriquecido, logs, falhas)
-    """
     logs = []
     logs.append(f"[INFO] Iniciando busca de CEPs para {len(df)} linhas")
     
     if "CEP" not in df.columns:
-        # Tentar encontrar coluna de CEP com nome alternativo
         cep_col = None
         for col in df.columns:
             if "cep" in col.lower():
@@ -449,13 +410,10 @@ async def process_busca_cep(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], 
 
 @api_router.post("/config/intelipost")
 async def save_intelipost_config(config: ApiConfigCreate):
-    """Salva ou atualiza configuração da API Intelipost"""
     try:
-        # Buscar config existente
         existing = await db.api_configs.find_one({}, {"_id": 0})
         
         if existing:
-            # Atualizar
             doc = {
                 "api_key_intelipost": config.api_key_intelipost,
                 "sobrepreco_padrao": config.sobrepreco_padrao,
@@ -464,7 +422,6 @@ async def save_intelipost_config(config: ApiConfigCreate):
             await db.api_configs.update_one({"id": existing["id"]}, {"$set": doc})
             return {"message": "Configuração atualizada com sucesso", "id": existing["id"]}
         else:
-            # Criar nova
             config_obj = ApiConfig(**config.model_dump())
             doc = config_obj.model_dump()
             doc["created_at"] = doc["created_at"].isoformat()
@@ -476,13 +433,11 @@ async def save_intelipost_config(config: ApiConfigCreate):
 
 @api_router.get("/config/intelipost")
 async def get_intelipost_config():
-    """Obtém configuração da API Intelipost (sem expor a API key completa)"""
     try:
         config = await db.api_configs.find_one({}, {"_id": 0})
         if not config:
             return {"configured": False}
         
-        # Mascarar API key
         api_key = config.get("api_key_intelipost", "")
         masked_key = api_key[:4] + "*" * (len(api_key) - 8) + api_key[-4:] if len(api_key) > 8 else "****"
         
@@ -494,15 +449,75 @@ async def get_intelipost_config():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.post("/depara/upload")
+async def upload_depara(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        depara_df = pd.read_excel(io.BytesIO(contents))
+        depara_df.columns = [c.strip() for c in depara_df.columns]
+        
+        col_intelipost = pick_column(
+            depara_df.columns,
+            "intelipost", "nome_intelipost", "delivery_method_name", "transportadora", "carrier"
+        )
+        col_erp = pick_column(depara_df.columns, "erp", "transportadora_erp", "nome_erp", "erp_nome")
+        col_cod_erp = pick_column(depara_df.columns, "codigo_erp", "cod_erp", "codigo", "código_erp")
+        
+        if not col_intelipost:
+            raise HTTPException(status_code=400, detail="Coluna de transportadora Intelipost não encontrada")
+        
+        mappings = {}
+        for _, r in depara_df.iterrows():
+            key = str(r[col_intelipost]).strip().lower() if not pd.isna(r[col_intelipost]) else ""
+            if not key:
+                continue
+            mappings[key] = {
+                "erp": (None if col_erp is None else (None if pd.isna(r.get(col_erp, None)) else str(r.get(col_erp)))),
+                "codigo_erp": (None if col_cod_erp is None else (None if pd.isna(r.get(col_cod_erp, None)) else str(r.get(col_cod_erp))))
+            }
+        
+        existing = await db.depara_mappings.find_one({}, {"_id": 0})
+        
+        if existing:
+            doc = {
+                "mappings": mappings,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.depara_mappings.update_one({"id": existing["id"]}, {"$set": doc})
+            return {"message": f"DE-PARA atualizado com {len(mappings)} mapeamentos", "count": len(mappings)}
+        else:
+            depara_obj = DeparaMapping(mappings=mappings)
+            doc = depara_obj.model_dump()
+            doc["created_at"] = doc["created_at"].isoformat()
+            doc["updated_at"] = doc["updated_at"].isoformat()
+            await db.depara_mappings.insert_one(doc)
+            return {"message": f"DE-PARA salvo com {len(mappings)} mapeamentos", "count": len(mappings)}
+            
+    except Exception as e:
+        logger.error(f"Erro ao fazer upload do DE-PARA: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/depara/status")
+async def get_depara_status():
+    try:
+        depara = await db.depara_mappings.find_one({}, {"_id": 0})
+        if not depara:
+            return {"configured": False, "count": 0}
+        
+        return {
+            "configured": True,
+            "count": len(depara.get("mappings", {})),
+            "updated_at": depara.get("updated_at")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @api_router.post("/cotacao/process")
 async def process_cotacao(
     file: UploadFile = File(...),
-    sobrepreco: Optional[float] = Form(None),
-    depara_file: Optional[UploadFile] = File(None)
+    sobrepreco: Optional[float] = Form(None)
 ):
-    """Processa arquivo de cotação de frete"""
     try:
-        # Obter configuração
         config = await db.api_configs.find_one({}, {"_id": 0})
         if not config:
             raise HTTPException(status_code=400, detail="Configure a API key da Intelipost primeiro")
@@ -510,17 +525,12 @@ async def process_cotacao(
         api_key = config.get("api_key_intelipost")
         sobreprc = sobrepreco if sobrepreco is not None else config.get("sobrepreco_padrao", 135.0)
         
-        # Ler arquivo principal
+        depara_doc = await db.depara_mappings.find_one({}, {"_id": 0})
+        depara_map = depara_doc.get("mappings", {}) if depara_doc else {}
+        
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents), dtype={"ceporigem": "string", "cepdestino": "string", "sku": "string"}, keep_default_na=False)
         
-        # Ler DE-PARA se fornecido
-        depara_df = None
-        if depara_file:
-            depara_contents = await depara_file.read()
-            depara_df = pd.read_excel(io.BytesIO(depara_contents))
-        
-        # Criar registro de histórico
         history = ProcessingHistory(
             tipo="cotacao",
             arquivo_entrada=file.filename,
@@ -531,16 +541,13 @@ async def process_cotacao(
         history_doc["created_at"] = history_doc["created_at"].isoformat()
         await db.processing_history.insert_one(history_doc)
         
-        # Processar
-        resultado_df, logs = await process_cotacao_intelipost(df, api_key, sobreprc, depara_df)
+        resultado_df, logs = await process_cotacao_intelipost(df, api_key, sobreprc, depara_map)
         
-        # Gerar arquivo Excel
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             resultado_df.to_excel(writer, index=False, sheet_name="cotacoes")
         output.seek(0)
         
-        # Atualizar histórico
         linhas_erro = len(resultado_df[resultado_df["status_retorno"].astype(str).str.contains("ERRO|SEM_OPCAO|EXCEPTION", na=False)])
         await db.processing_history.update_one(
             {"id": history.id},
@@ -554,7 +561,6 @@ async def process_cotacao(
             }}
         )
         
-        # Salvar arquivo no GridFS ou retornar diretamente
         filename = f"resultado-cotacao-{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
         return StreamingResponse(
@@ -569,13 +575,10 @@ async def process_cotacao(
 
 @api_router.post("/cep/process")
 async def process_cep(file: UploadFile = File(...)):
-    """Processa arquivo de busca de CEPs"""
     try:
-        # Ler arquivo
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents))
         
-        # Criar registro de histórico
         history = ProcessingHistory(
             tipo="cep",
             arquivo_entrada=file.filename,
@@ -586,10 +589,8 @@ async def process_cep(file: UploadFile = File(...)):
         history_doc["created_at"] = history_doc["created_at"].isoformat()
         await db.processing_history.insert_one(history_doc)
         
-        # Processar
         resultado_df, logs, falhas = await process_busca_cep(df)
         
-        # Gerar arquivo Excel
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             resultado_df.to_excel(writer, index=False, sheet_name="resultados")
@@ -597,7 +598,6 @@ async def process_cep(file: UploadFile = File(...)):
                 pd.DataFrame({"CEP": falhas}).to_excel(writer, index=False, sheet_name="falhas")
         output.seek(0)
         
-        # Atualizar histórico
         await db.processing_history.update_one(
             {"id": history.id},
             {"$set": {
@@ -624,7 +624,6 @@ async def process_cep(file: UploadFile = File(...)):
 
 @api_router.get("/history")
 async def get_history():
-    """Lista histórico de processamentos"""
     try:
         history = await db.processing_history.find({}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
         return {"history": history}
