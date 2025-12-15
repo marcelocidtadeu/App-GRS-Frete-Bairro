@@ -293,7 +293,7 @@ async def process_cotacao_intelipost(
                 "mensagem": extract_messages(data)
             })
             
-            logs.append(f"[SUCCESS] Linha {idx+1}: {carrier_nome} - R$ {final_cost:.2f}")
+            logs.append(f"[SUCCESS] Linha {idx+1}: {carrier_nome} - Base: R$ {final_cost_base:.2f} | Com sobrepreço: R$ {final_cost_com_sobrepreco:.2f}")
             time.sleep(0.4)
             
         except Exception as e:
