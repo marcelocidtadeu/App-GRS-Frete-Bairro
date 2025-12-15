@@ -1,0 +1,157 @@
+{
+  "identity": {
+    "name": "E1",
+    "archetype": "Swiss & High-Contrast",
+    "vibe": "Professional, Precise, Data-Driven, Efficient",
+    "mission": "Transform a utilitarian Excel processing tool into a clean, 'Control Room' style dashboard that instills confidence and clarity."
+  },
+  "typography": {
+    "primary_font": "Manrope",
+    "secondary_font": "Inter",
+    "mono_font": "JetBrains Mono",
+    "weights": {
+      "light": 300,
+      "regular": 400,
+      "medium": 500,
+      "bold": 700,
+      "black": 900
+    },
+    "usage": {
+      "headings": "Manrope, font-bold, tracking-tight, text-slate-900",
+      "body": "Inter, font-regular, text-slate-600",
+      "data_display": "JetBrains Mono, font-medium, text-slate-700",
+      "labels": "Inter, font-semibold, uppercase, tracking-wider, text-xs, text-slate-500"
+    }
+  },
+  "colors": {
+    "palette_name": "Corporate Precision",
+    "primary": {
+      "name": "International Blue",
+      "hex": "#2563EB",
+      "tailwind": "bg-blue-600",
+      "usage": "Primary Actions, Active States, Key Metrics"
+    },
+    "secondary": {
+      "name": "Slate Cool",
+      "hex": "#64748B",
+      "tailwind": "bg-slate-500",
+      "usage": "Secondary Actions, Borders, Subtext"
+    },
+    "background": {
+      "main": "#F8FAFC",
+      "tailwind": "bg-slate-50",
+      "surface": "#FFFFFF",
+      "tailwind_surface": "bg-white"
+    },
+    "status": {
+      "success": "text-emerald-600 bg-emerald-50 border-emerald-200",
+      "warning": "text-amber-600 bg-amber-50 border-amber-200",
+      "error": "text-rose-600 bg-rose-50 border-rose-200",
+      "info": "text-blue-600 bg-blue-50 border-blue-200"
+    },
+    "gradients": {
+      "subtle_overlay": "bg-gradient-to-b from-white to-slate-50"
+    }
+  },
+  "layout": {
+    "grid_system": "Control Room Grid (Mode B)",
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "spacing": {
+      "section_gap": "gap-8",
+      "card_padding": "p-6",
+      "internal_padding": "p-4"
+    },
+    "structure": {
+      "header": "Sticky, Glassmorphism (bg-white/80 backdrop-blur-md), border-b border-slate-200",
+      "dashboard": "Grid cols-1 md:cols-12 gap-6",
+      "sidebar": "Hidden on mobile, col-span-3 on desktop (if applicable) or Top Navigation"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-blue-600 hover:bg-blue-700 text-white shadow-sm rounded-md px-4 py-2 font-medium transition-all active:scale-95",
+      "secondary": "bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-sm rounded-md px-4 py-2 font-medium transition-all",
+      "destructive": "bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 shadow-sm rounded-md px-4 py-2 font-medium transition-all"
+    },
+    "cards": {
+      "base": "bg-white border border-slate-200 rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200",
+      "header": "border-b border-slate-100 p-4 flex justify-between items-center bg-slate-50/50 rounded-t-xl"
+    },
+    "inputs": {
+      "base": "flex h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm ring-offset-white file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+    },
+    "progress_bar": {
+      "container": "h-2 w-full bg-slate-100 rounded-full overflow-hidden",
+      "indicator": "h-full bg-blue-600 transition-all duration-500 ease-in-out"
+    },
+    "logs_console": {
+      "container": "bg-slate-900 rounded-lg p-4 font-mono text-xs h-64 overflow-y-auto border border-slate-800 shadow-inner",
+      "text_info": "text-blue-400",
+      "text_error": "text-rose-400",
+      "text_success": "text-emerald-400",
+      "text_default": "text-slate-300"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-md bg-white/70 border border-white/20 shadow-sm",
+    "borders": "border border-slate-200",
+    "shadows": "shadow-sm hover:shadow-md",
+    "textures": "Use subtle noise texture on the main background if possible, or keep it clean slate-50"
+  },
+  "motion": {
+    "hover": "transition-all duration-200 ease-out hover:-translate-y-0.5",
+    "click": "active:scale-95",
+    "enter": "animate-in fade-in zoom-in-95 duration-300",
+    "list_item": "animate-in slide-in-from-left-2 duration-300"
+  },
+  "image_urls": {
+    "hero_bg": {
+      "url": "https://images.unsplash.com/photo-1589725971583-8fa4d89e5e33?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "desc": "Grey container, blue and white metal locker - Use for login/landing background or subtle overlay",
+      "category": "background"
+    },
+    "processing_state": {
+      "url": "https://images.unsplash.com/photo-1691481486044-04f12d77a92c?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "desc": "Stack of cargo containers - Use for 'Processing' empty state or hero image",
+      "category": "illustration"
+    },
+    "office_vibe": {
+      "url": "https://images.unsplash.com/photo-1761123261084-53c40fe1e607?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "desc": "Clean UX Design Studio Desk - Use for 'Configuration' or 'Admin' section visuals",
+      "category": "illustration"
+    }
+  },
+  "instructions_to_main_agent": [
+    "1. SETUP: Ensure 'lucide-react' is installed for icons.",
+    "2. LAYOUT: Implement the 'Control Room' grid. The main dashboard should have a sidebar (or top bar) for navigation and a main area for the 'Tabs' (Intelipost vs ViaCEP).",
+    "3. TABS: Use the Shadcn 'Tabs' component to separate the two main functionalities.",
+    "4. UPLOAD: Create a distinct 'DropZone' component. It should be large, dashed border (border-dashed border-2 border-slate-300), and turn blue (border-blue-500 bg-blue-50) on drag over.",
+    "5. PROGRESS: When processing starts, show a clear Progress Bar. Below it, show the 'Logs Console' (black background, colored text) to give technical feedback.",
+    "6. HISTORY: The 'History' section should be a clean Shadcn Table. Use 'Badge' components for status (Success/Failed).",
+    "7. CONFIG: The Configuration section should be in a separate modal or a dedicated settings card. API Keys must be masked (type='password').",
+    "8. FEEDBACK: Use 'Sonner' for toast notifications on success/error.",
+    "9. DATA-TESTID: Add 'data-testid' to all buttons, inputs, and tabs.",
+    "10. DO NOT use gradients for backgrounds. Keep it flat and clean 'Swiss' style."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy",
+    "Use glass-morphism effects with backdrop filters (12-24px blur)",
+    "You MUST NOT apply universal transition. Eg: transition: all. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms",
+    "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file. This disrupts the human natural reading flow of text",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯📚🎭🎬🎪🎉🎊🎁🎀🎂🍰🎈🎨🎰💰💵💳🏦💎🪙💸🤑📊📈📉💹🔢🏆🥇 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations. Static = dead.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations: separates good from extraordinary.",
+    "Main agent relies on these image URLs. Missing categories (especially sponsor logos) = main agent will use placeholder text which is FORBIDDEN",
+    "Prioritize using pre-existing components from src/components/ui when applicable",
+    "Create new components that match the style and conventions of existing components when needed",
+    "Examine existing components to understand the project's component patterns before creating new ones",
+    "Components MUST use named exports (export const ComponentName = ...)",
+    "Pages MUST use default exports (export default function PageName() {...})",
+    "Use 'sonner' for toasts. Sonner component are located in /app/src/components/ui/sonner.tsx"
+  ]
+}
