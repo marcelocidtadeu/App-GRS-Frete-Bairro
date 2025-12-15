@@ -57,6 +57,8 @@ Aplicação web profissional para automatizar processamento de planilhas Excel c
 1. Clique no botão **"Configurações"** no canto superior direito
 2. Insira sua **API Key da Intelipost**
 3. Configure o **Sobrepreço Padrão** (exemplo: 135% = 2,35x o valor base)
+   - **IMPORTANTE:** A API Intelipost já retorna valores com 135% aplicado
+   - O sistema calcula automaticamente o valor base e aplica seu sobrepreço
 4. Clique em **"Salvar Configuração"**
 
 ### 2. Cotação de Frete
