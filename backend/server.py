@@ -250,11 +250,20 @@ async def process_cotacao_intelipost(
             
             menor_opcao = min(delivery_options, key=lambda x: x.get("final_shipping_cost", float("inf")))
             carrier_nome = menor_opcao.get("delivery_method_name") or menor_opcao.get("description") or "N/A"
-            final_cost = menor_opcao.get("final_shipping_cost")
+            final_cost_api = menor_opcao.get("final_shipping_cost")
             
+            # A API Intelipost JÁ retorna o valor com 135% de sobrepreço aplicado
+            # Precisamos calcular o valor BASE (sem sobrepreço) primeiro
+            final_cost_base = None
             final_cost_com_sobrepreco = None
-            if final_cost is not None:
-                final_cost_com_sobrepreco = final_cost * (1 + sobrepreco / 100)
+            
+            if final_cost_api is not None:
+                # Remover o sobrepreço de 135% que já vem da API
+                # Fórmula: valor_base = valor_com_sobrepreco / (1 + 1.35)
+                final_cost_base = final_cost_api / 2.35
+                
+                # Aplicar o sobrepreço configurado pelo usuário
+                final_cost_com_sobrepreco = final_cost_base * (1 + sobrepreco / 100)
             
             carrier_erp = "NÃO ENCONTRADO"
             codigo_erp = "NÃO ENCONTRADO"
