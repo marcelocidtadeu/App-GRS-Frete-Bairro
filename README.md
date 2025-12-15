@@ -12,9 +12,11 @@ Aplicação web profissional para automatizar processamento de planilhas Excel c
 - Upload de planilha Excel (.xlsx) com dados de produtos e destinos
 - Consulta automática à API Intelipost para cotação de frete
 - Seleção automática da melhor opção (menor custo)
-- Aplicação de sobrepreço configurável
+- Cálculo de valor base (API Intelipost retorna com 135% já aplicado)
+- Aplicação de sobrepreço configurável sobre o valor base
 - Suporte a planilha DE-PARA para mapeamento de transportadoras
-- Download do resultado em Excel com todas as informações
+- Download do resultado em Excel com 3 colunas de preço (API, Base, Com Sobrepreço)
+- Transparência total dos valores para análise
 
 **Colunas obrigatórias na planilha de entrada:**
 - `sku` - Código do produto
