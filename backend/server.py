@@ -263,10 +263,13 @@ async def process_cotacao_intelipost(
             if final_cost_api is not None:
                 # Remover o sobrepreço de 135% que já vem da API
                 # Fórmula: valor_base = valor_com_sobrepreco / (1 + 1.35)
-                final_cost_base = final_cost_api / 2.35
+                final_cost_base = round(final_cost_api / 2.35, 2)
                 
                 # Aplicar o sobrepreço configurado pelo usuário
-                final_cost_com_sobrepreco = final_cost_base * (1 + sobrepreco / 100)
+                final_cost_com_sobrepreco = round(final_cost_base * (1 + sobrepreco / 100), 2)
+                
+                # Arredondar também o valor da API
+                final_cost_api = round(final_cost_api, 2)
             
             carrier_erp = "NÃO ENCONTRADO"
             codigo_erp = "NÃO ENCONTRADO"
