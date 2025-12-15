@@ -8,6 +8,7 @@ import ConfigModal from "@/components/ConfigModal";
 import CotacaoTab from "@/components/CotacaoTab";
 import CepTab from "@/components/CepTab";
 import HistoryTable from "@/components/HistoryTable";
+import DeparaManager from "@/components/DeparaManager";
 import { toast } from "sonner";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -43,20 +44,28 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen" style={{backgroundColor: '#F8FAFC'}}>
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm">
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b shadow-sm" style={{borderColor: '#e2e8f0'}}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">Processador de Planilhas Excel</h1>
-              <p className="text-sm text-slate-600 mt-1">Cotação de Frete e Busca de Endereços</p>
+            <div className="flex items-center gap-4">
+              <img 
+                src="https://customer-assets.emergentagent.com/job_logistics-assist-2/artifacts/saslbsl0_WeConnect360-fundo-branco-grande.jpg" 
+                alt="WeConnect" 
+                className="h-10 object-contain"
+              />
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight" style={{color: '#001e5a'}}>Processador de Planilhas Excel</h1>
+                <p className="text-sm" style={{color: '#64748b'}}>Cotação de Frete e Busca de Endereços</p>
+              </div>
             </div>
             <Button
               data-testid="config-button"
               onClick={() => setShowConfigModal(true)}
               variant="outline"
-              className="flex items-center gap-2 hover:bg-slate-50"
+              className="flex items-center gap-2"
+              style={{borderColor: '#e2e8f0'}}
             >
               <Settings className="h-4 w-4" />
               Configurações
@@ -68,11 +77,14 @@ export default function Dashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full max-w-md mx-auto grid-cols-3 bg-white border border-slate-200 p-1 rounded-lg shadow-sm">
+          <TabsList className="grid w-full max-w-md mx-auto grid-cols-3 bg-white border p-1 rounded-lg shadow-sm" style={{borderColor: '#e2e8f0'}}>
             <TabsTrigger
               data-testid="tab-cotacao"
               value="cotacao"
-              className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white transition-all"
+              className="flex items-center gap-2 transition-all"
+              style={{
+                ...(activeTab === 'cotacao' ? {backgroundColor: '#001e5a', color: 'white'} : {})
+              }}
             >
               <FileSpreadsheet className="h-4 w-4" />
               Cotação Intelipost
@@ -80,7 +92,10 @@ export default function Dashboard() {
             <TabsTrigger
               data-testid="tab-cep"
               value="cep"
-              className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white transition-all"
+              className="flex items-center gap-2 transition-all"
+              style={{
+                ...(activeTab === 'cep' ? {backgroundColor: '#001e5a', color: 'white'} : {})
+              }}
             >
               <MapPin className="h-4 w-4" />
               Busca CEP
@@ -88,7 +103,10 @@ export default function Dashboard() {
             <TabsTrigger
               data-testid="tab-history"
               value="historico"
-              className="flex items-center gap-2 data-[state=active]:bg-blue-600 data-[state=active]:text-white transition-all"
+              className="flex items-center gap-2 transition-all"
+              style={{
+                ...(activeTab === 'historico' ? {backgroundColor: '#001e5a', color: 'white'} : {})
+              }}
             >
               <History className="h-4 w-4" />
               Histórico
@@ -96,7 +114,10 @@ export default function Dashboard() {
           </TabsList>
 
           <TabsContent value="cotacao" className="animate-in fade-in zoom-in-95 duration-300">
-            <CotacaoTab config={config} onComplete={handleProcessingComplete} />
+            <div className="space-y-6">
+              <DeparaManager />
+              <CotacaoTab config={config} onComplete={handleProcessingComplete} />
+            </div>
           </TabsContent>
 
           <TabsContent value="cep" className="animate-in fade-in zoom-in-95 duration-300">
@@ -104,9 +125,9 @@ export default function Dashboard() {
           </TabsContent>
 
           <TabsContent value="historico" className="animate-in fade-in zoom-in-95 duration-300">
-            <Card className="bg-white border-slate-200 rounded-xl shadow-sm">
+            <Card className="bg-white rounded-xl shadow-sm" style={{borderColor: '#e2e8f0'}}>
               <CardHeader>
-                <CardTitle className="text-slate-900">Histórico de Processamentos</CardTitle>
+                <CardTitle style={{color: '#001e5a'}}>Histórico de Processamentos</CardTitle>
                 <CardDescription>Visualize todos os processamentos anteriores</CardDescription>
               </CardHeader>
               <CardContent>
