@@ -64,12 +64,17 @@ Aplicação web profissional para automatizar processamento de planilhas Excel c
 ### 2. Cotação de Frete
 
 1. Acesse a aba **"Cotação Intelipost"**
-2. Configure o sobrepreço (ou use o padrão)
-3. (Opcional) Faça upload da planilha DE-PARA
+2. (Opcional) Faça upload da planilha DE-PARA (apenas uma vez)
+3. Configure o sobrepreço para este processamento (ou use o padrão)
 4. Arraste ou selecione o arquivo Excel com os dados
 5. Clique em **"Executar Cotações"**
 6. Acompanhe o progresso e os logs em tempo real
 7. O arquivo será baixado automaticamente ao concluir
+
+**Colunas de Preço no Resultado:**
+- `final_shipping_cost_api`: Valor retornado pela Intelipost (com 135% já aplicado)
+- `final_shipping_cost_base`: Valor base real do frete (sem markup)
+- `final_shipping_cost_com_sobrepreco`: Valor com seu sobrepreço aplicado (use este para cobrar o cliente)
 
 ### 3. Busca de CEP
 
