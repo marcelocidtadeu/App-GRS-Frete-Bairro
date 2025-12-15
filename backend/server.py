@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Form
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,67 +7,630 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
-
+import pandas as pd
+import requests
+import time
+import re
+import json
+import io
+from typing import Tuple
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
 app = FastAPI()
-
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# ============ MODELS ============
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
+class ApiConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    api_key_intelipost: str
+    sobrepreco_padrao: float = 135.0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class ApiConfigCreate(BaseModel):
+    api_key_intelipost: str
+    sobrepreco_padrao: float = 135.0
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
+class ProcessingHistory(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tipo: str  # "cotacao" ou "cep"
+    arquivo_entrada: str
+    arquivo_saida: Optional[str] = None
+    status: str  # "processando", "concluido", "erro"
+    total_linhas: int = 0
+    linhas_processadas: int = 0
+    linhas_com_erro: int = 0
+    logs: List[str] = Field(default_factory=list)
+    erro_msg: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: Optional[datetime] = None
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
+# ============ HELPER FUNCTIONS ============
+
+def to_float(x):
+    """Converte um valor para float, lidando com vírgulas"""
+    if pd.isna(x):
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip().replace(",", ".").replace("\u200b", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+def normalize_cep(val):
+    """Normaliza um CEP para conter apenas dígitos, completando com zero à esquerda"""
+    s = re.sub(r"\D", "", str(val) if val is not None else "")
+    if len(s) < 8:
+        s = s.zfill(8)
+    return s if len(s) == 8 else None
+
+def extract_messages(data_or_text):
+    """Extrai mensagens de erro de uma resposta de API"""
+    try:
+        if isinstance(data_or_text, str):
+            return data_or_text[:500]
+        data = data_or_text or {}
+        msgs = data.get("messages") or data.get("message") or []
+        if isinstance(msgs, dict):
+            msgs = [msgs]
+        out = []
+        for m in msgs:
+            if isinstance(m, dict):
+                picked = []
+                for k in ("text", "message", "description", "detail", "error", "cause", "type", "id"):
+                    if k in m and m[k]:
+                        picked.append(str(m[k]))
+                out.append(" - ".join(picked) if picked else json.dumps(m, ensure_ascii=False))
+            else:
+                out.append(str(m))
+        return " | ".join([s for s in out if s])[:1000] if out else ""
+    except Exception:
+        try:
+            return json.dumps(data_or_text, ensure_ascii=False)[:500]
+        except Exception:
+            return str(data_or_text)[:500]
+
+def pick_column(cols, *candidates):
+    """Procura em uma lista de colunas pelo primeiro match (case-insensitive)"""
+    low_map = {c.strip().lower(): c for c in cols}
+    for cand in candidates:
+        key = cand.strip().lower()
+        if key in low_map:
+            return low_map[key]
+    for cand in candidates:
+        key = cand.strip().lower()
+        for low, original in low_map.items():
+            if key in low:
+                return original
+    return None
+
+# ============ INTELIPOST LOGIC ============
+
+async def process_cotacao_intelipost(
+    df: pd.DataFrame,
+    api_key: str,
+    sobrepreco: float,
+    depara_df: Optional[pd.DataFrame] = None
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Processa cotações de frete usando a API Intelipost
+    Retorna (DataFrame de resultados, logs)
+    """
+    logs = []
+    logs.append(f"[INFO] Iniciando processamento de {len(df)} linhas")
     
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
+    # Processar DE-PARA se fornecido
+    depara_map = {}
+    depara_available = False
+    if depara_df is not None:
+        try:
+            depara_df.columns = [c.strip() for c in depara_df.columns]
+            col_intelipost = pick_column(
+                depara_df.columns,
+                "intelipost", "nome_intelipost", "delivery_method_name", "transportadora", "carrier"
+            )
+            col_erp = pick_column(depara_df.columns, "erp", "transportadora_erp", "nome_erp", "erp_nome")
+            col_cod_erp = pick_column(depara_df.columns, "codigo_erp", "cod_erp", "codigo", "código_erp")
+            
+            if col_intelipost:
+                depara_available = True
+                for _, r in depara_df.iterrows():
+                    key = str(r[col_intelipost]).strip().lower() if not pd.isna(r[col_intelipost]) else ""
+                    if not key:
+                        continue
+                    depara_map[key] = {
+                        "erp": (None if col_erp is None else (None if pd.isna(r.get(col_erp, None)) else str(r.get(col_erp)))),
+                        "codigo_erp": (None if col_cod_erp is None else (None if pd.isna(r.get(col_cod_erp, None)) else str(r.get(col_cod_erp))))
+                    }
+                logs.append(f"[INFO] DE-PARA carregado com {len(depara_map)} mapeamentos")
+        except Exception as e:
+            logs.append(f"[WARN] Erro ao processar DE-PARA: {str(e)}")
     
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+    # Preparar DataFrame
+    df.columns = [c.strip().lower() for c in df.columns]
+    
+    # Remover coluna de estado se existir
+    for nome in ["est", "estado", "uf"]:
+        if nome in df.columns:
+            df = df.drop(columns=[nome])
+            break
+    
+    # Converter colunas numéricas
+    colunas_numericas = ["peso", "precoproduto", "comprimento", "altura", "largura"]
+    obrigatorias = ["sku", "ceporigem", "cepdestino"] + colunas_numericas
+    
+    faltantes = [c for c in obrigatorias if c not in df.columns]
+    if faltantes:
+        raise ValueError(f"Colunas obrigatórias faltando: {faltantes}")
+    
+    for col in colunas_numericas:
+        df[col] = df[col].apply(to_float)
+    
+    # Normalizar CEPs
+    df["cep_origem_payload"] = df["ceporigem"].apply(normalize_cep)
+    df["cep_destino_payload"] = df["cepdestino"].apply(normalize_cep)
+    
+    # Fazer requisições
+    endpoint = "https://api.intelipost.com.br/api/v1/quote_by_product"
+    headers = {
+        "api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    
+    session = requests.Session()
+    session.headers.update(headers)
+    resultados = []
+    
+    for idx, row in df.iterrows():
+        try:
+            cep_origem = row["cep_origem_payload"]
+            cep_destino = row["cep_destino_payload"]
+            
+            if not cep_origem or not cep_destino:
+                logs.append(f"[WARN] Linha {idx+1}: CEP inválido")
+                resultados.append({
+                    "sku": row["sku"],
+                    "cep_origem_payload": cep_origem,
+                    "cep_destino_payload": cep_destino,
+                    "final_shipping_cost": None,
+                    "final_shipping_cost_com_sobrepreco": None,
+                    "carrier": "CEP_INVALIDO",
+                    "carrier_erp": "NÃO ENCONTRADO",
+                    "codigo_erp": "NÃO ENCONTRADO",
+                    "status_retorno": "ERRO",
+                    "mensagem": "CEP origem ou destino inválido"
+                })
+                continue
+            
+            payload = {
+                "origin_zip_code": cep_origem,
+                "destination_zip_code": cep_destino,
+                "quoting_mode": "DYNAMIC_BOX_ALL_ITEMS",
+                "products": [{
+                    "weight": to_float(row["peso"]),
+                    "cost_of_goods": to_float(row["precoproduto"]),
+                    "width": to_float(row["largura"]),
+                    "height": to_float(row["altura"]),
+                    "length": to_float(row["comprimento"]),
+                    "quantity": 1,
+                    "sku_id": str(row["sku"]),
+                    "product_category": None
+                }]
+            }
+            
+            resp = session.post(endpoint, json=payload, timeout=60)
+            
+            if resp.status_code in (429, 500, 502, 503, 504):
+                time.sleep(1.5)
+                resp = session.post(endpoint, json=payload, timeout=60)
+            
+            try:
+                data = resp.json()
+            except ValueError:
+                logs.append(f"[ERROR] Linha {idx+1}: Resposta inválida da API")
+                resultados.append({
+                    "sku": row["sku"],
+                    "cep_origem_payload": cep_origem,
+                    "cep_destino_payload": cep_destino,
+                    "final_shipping_cost": None,
+                    "final_shipping_cost_com_sobrepreco": None,
+                    "carrier": "ERRO_JSON",
+                    "carrier_erp": "NÃO ENCONTRADO",
+                    "codigo_erp": "NÃO ENCONTRADO",
+                    "status_retorno": resp.status_code,
+                    "mensagem": extract_messages(resp.text)
+                })
+                continue
+            
+            delivery_options = (data.get("content") or {}).get("delivery_options", [])
+            
+            if not delivery_options:
+                logs.append(f"[WARN] Linha {idx+1}: Sem opções de entrega")
+                resultados.append({
+                    "sku": row["sku"],
+                    "cep_origem_payload": cep_origem,
+                    "cep_destino_payload": cep_destino,
+                    "final_shipping_cost": None,
+                    "final_shipping_cost_com_sobrepreco": None,
+                    "carrier": "SEM_OPCAO",
+                    "carrier_erp": "NÃO ENCONTRADO",
+                    "codigo_erp": "NÃO ENCONTRADO",
+                    "status_retorno": data.get("status", resp.status_code),
+                    "mensagem": extract_messages(data)
+                })
+                continue
+            
+            # Selecionar menor opção
+            menor_opcao = min(delivery_options, key=lambda x: x.get("final_shipping_cost", float("inf")))
+            carrier_nome = menor_opcao.get("delivery_method_name") or menor_opcao.get("description") or "N/A"
+            final_cost = menor_opcao.get("final_shipping_cost")
+            
+            # Aplicar sobrepreço
+            final_cost_com_sobrepreco = None
+            if final_cost is not None:
+                final_cost_com_sobrepreco = final_cost * (1 + sobrepreco / 100)
+            
+            # Aplicar DE-PARA
+            carrier_erp = "NÃO ENCONTRADO"
+            codigo_erp = "NÃO ENCONTRADO"
+            if depara_available:
+                key = str(carrier_nome).strip().lower()
+                mapa = depara_map.get(key, {})
+                carrier_erp = mapa.get("erp", "NÃO ENCONTRADO") or "NÃO ENCONTRADO"
+                codigo_erp = mapa.get("codigo_erp", "NÃO ENCONTRADO") or "NÃO ENCONTRADO"
+            
+            resultados.append({
+                "sku": row["sku"],
+                "cep_origem_payload": cep_origem,
+                "cep_destino_payload": cep_destino,
+                "final_shipping_cost": final_cost,
+                "final_shipping_cost_com_sobrepreco": final_cost_com_sobrepreco,
+                "carrier": carrier_nome,
+                "carrier_erp": carrier_erp,
+                "codigo_erp": codigo_erp,
+                "prazo_bd_uteis": menor_opcao.get("delivery_estimate_business_days"),
+                "metodo": menor_opcao.get("delivery_method_type"),
+                "contrato_id": menor_opcao.get("logistic_contract_id"),
+                "status_retorno": data.get("status", resp.status_code),
+                "mensagem": extract_messages(data)
+            })
+            
+            logs.append(f"[SUCCESS] Linha {idx+1}: {carrier_nome} - R$ {final_cost:.2f}")
+            time.sleep(0.4)
+            
+        except Exception as e:
+            logs.append(f"[ERROR] Linha {idx+1}: {str(e)}")
+            resultados.append({
+                "sku": row.get("sku"),
+                "cep_origem_payload": row.get("cep_origem_payload"),
+                "cep_destino_payload": row.get("cep_destino_payload"),
+                "final_shipping_cost": None,
+                "final_shipping_cost_com_sobrepreco": None,
+                "carrier": "ERRO_EXCEPTION",
+                "carrier_erp": "NÃO ENCONTRADO",
+                "codigo_erp": "NÃO ENCONTRADO",
+                "status_retorno": "EXCEPTION",
+                "mensagem": str(e)
+            })
+    
+    resultado_df = pd.DataFrame(resultados)
+    logs.append(f"[INFO] Processamento concluído: {len(resultado_df)} linhas")
+    
+    return resultado_df, logs
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+# ============ VIACEP LOGIC ============
 
-# Include the router in the main app
+def limpar_cep(cep) -> Optional[str]:
+    """Mantém apenas dígitos e completa com zeros à esquerda"""
+    if pd.isna(cep):
+        return None
+    cep = "".join(ch for ch in str(cep) if ch.isdigit())
+    if len(cep) == 0:
+        return None
+    if len(cep) < 8:
+        cep = cep.zfill(8)
+    return cep if len(cep) == 8 else None
+
+def via_cep_lookup(session: requests.Session, cep: str, timeout: int = 5) -> Optional[Dict]:
+    """Consulta ViaCEP e retorna o JSON"""
+    url = f"https://viacep.com.br/ws/{cep}/json/"
+    try:
+        r = session.get(url, timeout=timeout)
+        if r.status_code == 200:
+            data = r.json()
+            if not data.get("erro"):
+                return data
+    except requests.RequestException:
+        return None
+    return None
+
+def buscar_bairro_via_cep(
+    session: requests.Session,
+    cep: str,
+    tentativas: int = 4,
+    atraso_base: float = 0.4
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Faz retries com backoff exponencial para ViaCEP"""
+    for i in range(tentativas):
+        data = via_cep_lookup(session, cep)
+        if data:
+            bairro = (data.get("bairro") or "").strip() or None
+            cidade = (data.get("localidade") or "").strip() or None
+            uf = (data.get("uf") or "").strip() or None
+            return bairro, cidade, uf
+        time.sleep(atraso_base * (2 ** i))
+    return None, None, None
+
+async def process_busca_cep(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[str]]:
+    """
+    Processa busca de CEPs usando ViaCEP
+    Retorna (DataFrame enriquecido, logs, falhas)
+    """
+    logs = []
+    logs.append(f"[INFO] Iniciando busca de CEPs para {len(df)} linhas")
+    
+    if "CEP" not in df.columns:
+        # Tentar encontrar coluna de CEP com nome alternativo
+        cep_col = None
+        for col in df.columns:
+            if "cep" in col.lower():
+                cep_col = col
+                break
+        if not cep_col:
+            raise ValueError("A planilha precisa ter a coluna 'CEP'")
+        df = df.rename(columns={cep_col: "CEP"})
+    
+    cache: Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]] = {}
+    bairros = []
+    cidades = []
+    ufs = []
+    falhas = []
+    
+    with requests.Session() as session:
+        last_cep = None
+        
+        for idx, raw_cep in enumerate(df["CEP"]):
+            cep = limpar_cep(raw_cep)
+            
+            if not cep:
+                bairros.append(None)
+                cidades.append(None)
+                ufs.append(None)
+                falhas.append(str(raw_cep))
+                logs.append(f"[WARN] Linha {idx+1}: CEP inválido ({raw_cep})")
+                continue
+            
+            if cep in cache:
+                bairro, cidade, uf = cache[cep]
+            else:
+                if last_cep is None or cep != last_cep:
+                    time.sleep(0.25)
+                bairro, cidade, uf = buscar_bairro_via_cep(session, cep)
+                cache[cep] = (bairro, cidade, uf)
+            
+            bairros.append(bairro)
+            cidades.append(cidade)
+            ufs.append(uf)
+            
+            if bairro is None:
+                falhas.append(cep)
+                logs.append(f"[WARN] Linha {idx+1}: Bairro não encontrado para CEP {cep}")
+            else:
+                logs.append(f"[SUCCESS] Linha {idx+1}: {bairro}, {cidade}/{uf}")
+            
+            last_cep = cep
+    
+    df["CEP Limpo"] = [limpar_cep(c) for c in df["CEP"]]
+    df["Bairro"] = bairros
+    df["Cidade"] = cidades
+    df["UF"] = ufs
+    
+    logs.append(f"[INFO] Processamento concluído: {len(df)} linhas, {len(falhas)} falhas")
+    
+    return df, logs, falhas
+
+# ============ API ENDPOINTS ============
+
+@api_router.post("/config/intelipost")
+async def save_intelipost_config(config: ApiConfigCreate):
+    """Salva ou atualiza configuração da API Intelipost"""
+    try:
+        # Buscar config existente
+        existing = await db.api_configs.find_one({}, {"_id": 0})
+        
+        if existing:
+            # Atualizar
+            doc = {
+                "api_key_intelipost": config.api_key_intelipost,
+                "sobrepreco_padrao": config.sobrepreco_padrao,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.api_configs.update_one({"id": existing["id"]}, {"$set": doc})
+            return {"message": "Configuração atualizada com sucesso", "id": existing["id"]}
+        else:
+            # Criar nova
+            config_obj = ApiConfig(**config.model_dump())
+            doc = config_obj.model_dump()
+            doc["created_at"] = doc["created_at"].isoformat()
+            doc["updated_at"] = doc["updated_at"].isoformat()
+            await db.api_configs.insert_one(doc)
+            return {"message": "Configuração salva com sucesso", "id": config_obj.id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/config/intelipost")
+async def get_intelipost_config():
+    """Obtém configuração da API Intelipost (sem expor a API key completa)"""
+    try:
+        config = await db.api_configs.find_one({}, {"_id": 0})
+        if not config:
+            return {"configured": False}
+        
+        # Mascarar API key
+        api_key = config.get("api_key_intelipost", "")
+        masked_key = api_key[:4] + "*" * (len(api_key) - 8) + api_key[-4:] if len(api_key) > 8 else "****"
+        
+        return {
+            "configured": True,
+            "api_key_masked": masked_key,
+            "sobrepreco_padrao": config.get("sobrepreco_padrao", 135.0)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/cotacao/process")
+async def process_cotacao(
+    file: UploadFile = File(...),
+    sobrepreco: Optional[float] = Form(None),
+    depara_file: Optional[UploadFile] = File(None)
+):
+    """Processa arquivo de cotação de frete"""
+    try:
+        # Obter configuração
+        config = await db.api_configs.find_one({}, {"_id": 0})
+        if not config:
+            raise HTTPException(status_code=400, detail="Configure a API key da Intelipost primeiro")
+        
+        api_key = config.get("api_key_intelipost")
+        sobreprc = sobrepreco if sobrepreco is not None else config.get("sobrepreco_padrao", 135.0)
+        
+        # Ler arquivo principal
+        contents = await file.read()
+        df = pd.read_excel(io.BytesIO(contents), dtype={"ceporigem": "string", "cepdestino": "string", "sku": "string"}, keep_default_na=False)
+        
+        # Ler DE-PARA se fornecido
+        depara_df = None
+        if depara_file:
+            depara_contents = await depara_file.read()
+            depara_df = pd.read_excel(io.BytesIO(depara_contents))
+        
+        # Criar registro de histórico
+        history = ProcessingHistory(
+            tipo="cotacao",
+            arquivo_entrada=file.filename,
+            status="processando",
+            total_linhas=len(df)
+        )
+        history_doc = history.model_dump()
+        history_doc["created_at"] = history_doc["created_at"].isoformat()
+        await db.processing_history.insert_one(history_doc)
+        
+        # Processar
+        resultado_df, logs = await process_cotacao_intelipost(df, api_key, sobreprc, depara_df)
+        
+        # Gerar arquivo Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            resultado_df.to_excel(writer, index=False, sheet_name="cotacoes")
+        output.seek(0)
+        
+        # Atualizar histórico
+        linhas_erro = len(resultado_df[resultado_df["status_retorno"].astype(str).str.contains("ERRO|SEM_OPCAO|EXCEPTION", na=False)])
+        await db.processing_history.update_one(
+            {"id": history.id},
+            {"$set": {
+                "status": "concluido",
+                "linhas_processadas": len(resultado_df),
+                "linhas_com_erro": linhas_erro,
+                "logs": logs,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "arquivo_saida": f"resultado-cotacao-{history.id}.xlsx"
+            }}
+        )
+        
+        # Salvar arquivo no GridFS ou retornar diretamente
+        filename = f"resultado-cotacao-{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        return StreamingResponse(
+            io.BytesIO(output.getvalue()),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Erro ao processar cotação: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/cep/process")
+async def process_cep(file: UploadFile = File(...)):
+    """Processa arquivo de busca de CEPs"""
+    try:
+        # Ler arquivo
+        contents = await file.read()
+        df = pd.read_excel(io.BytesIO(contents))
+        
+        # Criar registro de histórico
+        history = ProcessingHistory(
+            tipo="cep",
+            arquivo_entrada=file.filename,
+            status="processando",
+            total_linhas=len(df)
+        )
+        history_doc = history.model_dump()
+        history_doc["created_at"] = history_doc["created_at"].isoformat()
+        await db.processing_history.insert_one(history_doc)
+        
+        # Processar
+        resultado_df, logs, falhas = await process_busca_cep(df)
+        
+        # Gerar arquivo Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            resultado_df.to_excel(writer, index=False, sheet_name="resultados")
+            if falhas:
+                pd.DataFrame({"CEP": falhas}).to_excel(writer, index=False, sheet_name="falhas")
+        output.seek(0)
+        
+        # Atualizar histórico
+        await db.processing_history.update_one(
+            {"id": history.id},
+            {"$set": {
+                "status": "concluido",
+                "linhas_processadas": len(resultado_df),
+                "linhas_com_erro": len(falhas),
+                "logs": logs,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "arquivo_saida": f"resultado-cep-{history.id}.xlsx"
+            }}
+        )
+        
+        filename = f"resultado-cep-{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        return StreamingResponse(
+            io.BytesIO(output.getvalue()),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Erro ao processar CEPs: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/history")
+async def get_history():
+    """Lista histórico de processamentos"""
+    try:
+        history = await db.processing_history.find({}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
+        return {"history": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -77,7 +641,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
