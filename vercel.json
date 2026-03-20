@@ -4,6 +4,6 @@
   "installCommand": "cd frontend && yarn install",
   "framework": null,
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.py" }
+    { "source": "/api/(.*)", "destination": "/api" }
   ]
 }
