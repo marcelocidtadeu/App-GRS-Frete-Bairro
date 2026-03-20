@@ -3,11 +3,6 @@
   "installCommand": "cd frontend && yarn install",
   "buildCommand": "cd frontend && yarn build",
   "outputDirectory": "frontend/build",
-  "functions": {
-    "api/**/*.py": {
-      "excludeFiles": "{frontend/**,node_modules/**,tests/**,test_reports/**,.emergent/**}"
-    }
-  },
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/index.py" },
     { "source": "/(.*)", "destination": "/index.html" }
