@@ -1,0 +1,7 @@
+{
+  "name": "app-grs-frete-bairro",
+  "private": true,
+  "scripts": {
+    "build": "cd frontend && yarn install && yarn build"
+  }
+}
